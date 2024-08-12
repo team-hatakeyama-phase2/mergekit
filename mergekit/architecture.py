@@ -327,6 +327,54 @@ class MixtralTensorNames(ArchitectureInfo, BaseModel):
         return False
 
 
+class TanukiTensorNames(ArchitectureInfo, BaseModel):
+    ARCHITECTURE_NAME: ClassVar[str] = "TanukiForCausalLM"
+    num_local_experts: int
+
+    def name(self) -> str:
+        return "Tanuki"
+
+    @classmethod
+    def from_config(cls, config: PretrainedConfig):
+        return TanukiTensorNames(num_local_experts=config.num_local_experts)
+
+    def pre_weights(self, config: PretrainedConfig) -> List[WeightInfo]:
+        return MISTRAL_INFO.pre_weights(config)
+
+    def post_weights(self, config: PretrainedConfig) -> List[WeightInfo]:
+        return MISTRAL_INFO.post_weights(config)
+
+    def num_layers_config_key(self) -> str:
+        return MISTRAL_INFO.num_layers_config_key()
+
+    def layer_weights(
+        self, index: int, config: PretrainedConfig
+    ) -> Optional[List[WeightInfo]]:
+        num_experts = self.num_local_experts
+        prefix = f"model.layers.{index}"
+        tensor_names = []
+        for expert_idx in range(num_experts):
+            for param in ("w1", "w2", "w3"):
+                tensor_names.append(
+                    prefix + f".block_sparse_moe.experts.{expert_idx}.{param}.weight"
+                )
+        tensor_names.append(prefix + ".block_sparse_moe.gate.weight")
+        res = []
+        for name in tensor_names:
+            res.append(WeightInfo(name=name))
+        for weight_info in MISTRAL_INFO.layer_weights(index, config):
+            if ".mlp." in weight_info.name:
+                continue
+            res.append(weight_info)
+        return res
+
+    def sliceable(self) -> bool:
+        return True
+
+    def has_defined_spaces(self) -> bool:
+        return False
+
+
 def _load_json_arch(name: str) -> JsonArchitectureInfo:
     text = importlib.resources.read_text(mergekit._data.architectures, name)
     return JsonArchitectureInfo(
@@ -363,6 +411,9 @@ def get_architecture_info(config: PretrainedConfig) -> ArchitectureInfo:
 
     if arch_name == MixtralTensorNames.ARCHITECTURE_NAME:
         return MixtralTensorNames.from_config(config)
+
+    if arch_name == TanukiTensorNames.ARCHITECTURE_NAME:
+        return TanukiTensorNames.from_config(config)
 
     if arch_name not in NAME_TO_ARCH:
         raise RuntimeError(f"Unsupported architecture {arch_name}")
